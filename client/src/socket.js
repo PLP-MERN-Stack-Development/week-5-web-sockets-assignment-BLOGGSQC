@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 
-// Connect to backend server
-const socket = io("http://localhost:5000", { autoConnect: false });
+export const socket = io("https://week-5-web-sockets-assignment-bloggsqc.onrender.com", {
+  autoConnect: false,
+});
 
 export function useSocket() {
   const [messages, setMessages] = useState([]);
   const [users, setUsers] = useState([]);
   const [typingUsers, setTypingUsers] = useState([]);
   const [isConnected, setIsConnected] = useState(false);
+  const [readReceipts, setReadReceipts] = useState([]);
   const usernameRef = useRef("");
 
   const connect = (username, room) => {
@@ -32,6 +34,14 @@ export function useSocket() {
 
   const joinRoom = (room) => {
     socket.emit("join_room", room);
+  };
+
+  const hasBeenRead = (msg) => {
+    return readReceipts.some(
+      (r) =>
+        r.reader !== usernameRef.current &&
+        new Date(r.timestamp) >= new Date(msg.timestamp)
+    );
   };
 
   useEffect(() => {
@@ -60,6 +70,10 @@ export function useSocket() {
       );
     });
 
+    socket.on("message_read_ack", ({ reader, timestamp }) => {
+      setReadReceipts((prev) => [...prev, { reader, timestamp }]);
+    });
+
     requestNotificationPermission();
 
     return () => {
@@ -69,12 +83,13 @@ export function useSocket() {
       socket.off("system_message");
       socket.off("update_users");
       socket.off("typing");
+      socket.off("message_read_ack");
     };
   }, []);
 
   const playSound = () => {
     const audio = new Audio("/notification.mp3");
-    audio.play().catch(() => {}); // Prevent autoplay error
+    audio.play().catch(() => {});
   };
 
   const showNotification = (msg) => {
@@ -110,5 +125,6 @@ export function useSocket() {
     typingUsers,
     setTyping,
     joinRoom,
+    hasBeenRead,
   };
 }

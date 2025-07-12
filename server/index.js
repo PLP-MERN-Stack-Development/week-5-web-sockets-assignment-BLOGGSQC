@@ -1,119 +1,101 @@
 const express = require("express");
 const http = require("http");
-const { Server } = require("socket.io");
 const cors = require("cors");
+const { Server } = require("socket.io");
 
 const app = express();
+app.use(cors());
+
 const server = http.createServer(app);
 
-// Create the Socket.io server
 const io = new Server(server, {
   cors: {
-    origin: "http://localhost:5173",
+    origin: "*",
     methods: ["GET", "POST"],
   },
 });
 
-app.use(cors());
-
-// In-memory store of connected users
-let users = {}; // { socket.id: { username, room } }
-
 io.on("connection", (socket) => {
-  console.log(`🟢 ${socket.id} connected`);
+  console.log("✅ A user connected");
 
-  // When a user joins
   socket.on("user_join", ({ username, room }) => {
-    users[socket.id] = { username, room };
-    socket.join(room);
-    console.log(`👤 ${username} joined room: ${room}`);
+    socket.data.username = username;
+    socket.data.room = room;
+    if (room) socket.join(room);
 
-    socket.broadcast.to(room).emit("system_message", {
-      message: `${username} joined the room`,
+    socket.broadcast.emit("system_message", {
+      message: `${username} has joined the chat.`,
     });
 
-    io.to(room).emit("update_users", getUserList(room));
+    updateUsers();
   });
 
-  // When user sends a message
-  socket.on("send_message", ({ message, to, room }) => {
-    const sender = users[socket.id];
-    if (!sender) return;
-
-    const fullMessage = {
-      sender: sender.username,
+  socket.on("send_message", ({ message, to, room, type }) => {
+    const msg = {
+      sender: socket.data.username,
       message,
       timestamp: new Date(),
+      type,
     };
 
-    if (to) {
-      // Send private message
-      socket.to(to).emit("receive_message", fullMessage);
-      socket.emit("receive_message", fullMessage); // echo back to sender
-    } else if (room) {
-      // Send to room
-      io.to(room).emit("receive_message", fullMessage);
+    if (room) {
+      io.to(room).emit("receive_message", msg);
+    } else if (to) {
+      io.to(to).emit("receive_message", msg);
+      socket.emit("receive_message", msg);
     } else {
-      // Fallback: broadcast globally
-      io.emit("receive_message", fullMessage);
+      io.emit("receive_message", msg);
     }
   });
 
-  // Typing indicator
   socket.on("typing", (isTyping) => {
-    const user = users[socket.id];
-    if (!user) return;
-    socket.broadcast.to(user.room).emit("typing", {
-      username: user.username,
+    socket.broadcast.emit("typing", {
+      username: socket.data.username,
       isTyping,
     });
   });
 
-  // When switching rooms
-  socket.on("join_room", (newRoom) => {
-    const user = users[socket.id];
-    if (user) {
-      const oldRoom = user.room;
-      socket.leave(oldRoom);
-      socket.join(newRoom);
-      user.room = newRoom;
-
-      socket.emit("system_message", {
-        message: `Switched to room: ${newRoom}`,
-      });
-
-      io.to(oldRoom).emit("update_users", getUserList(oldRoom));
-      io.to(newRoom).emit("update_users", getUserList(newRoom));
+  socket.on("message_read", ({ sender }) => {
+    const reader = socket.data.username;
+    const ack = { reader, timestamp: new Date() };
+    if (sender) {
+      io.to(sender).emit("message_read_ack", ack);
+    } else {
+      socket.broadcast.emit("message_read_ack", ack);
     }
   });
 
-  // When a user disconnects
+  socket.on("join_room", (room) => {
+    socket.join(room);
+    socket.data.room = room;
+    socket.emit("system_message", {
+      message: `You joined room ${room}`,
+    });
+  });
+
   socket.on("disconnect", () => {
-    const user = users[socket.id];
-    if (user) {
-      console.log(`🔴 ${user.username} disconnected from ${user.room}`);
-      socket.broadcast.to(user.room).emit("system_message", {
-        message: `${user.username} left the room`,
-      });
-      delete users[socket.id];
-      io.to(user.room).emit("update_users", getUserList(user.room));
-    }
+    const username = socket.data.username;
+    console.log(`❌ ${username} disconnected`);
+    socket.broadcast.emit("system_message", {
+      message: `${username} left the chat.`,
+    });
+    updateUsers();
   });
-});
 
-// Helper: get users in a specific room
-function getUserList(room) {
-  return Object.entries(users)
-    .filter(([_, user]) => user.room === room)
-    .map(([id, { username }]) => ({ id, username }));
-}
+  function updateUsers() {
+    const users = [];
+    for (let [id, s] of io.of("/").sockets) {
+      users.push({ id, username: s.data.username, room: s.data.room });
+    }
+    io.emit("update_users", users);
+  }
+});
 
 app.get("/", (req, res) => {
-  res.send("🚀 Socket.io chat server is running!");
+  res.send("🔵 Socket.IO Chat Server is running.");
 });
 
-// Start the server
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
-  console.log(`✅ Server listening on http://localhost:${PORT}`);
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
